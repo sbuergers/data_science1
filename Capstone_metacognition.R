@@ -213,6 +213,37 @@ for (i in 1:length(list.RT)) {
 }
 
 
+# 
+# scaled.list <- list()
+# for(i in 1:length(list.fin)){
+#   # loop over subjects in this dataset
+#   subs <- unique(list.fin[[i]]$subj_idx)  
+#   subj.list <- list()
+#   for(j in 1:length(subs)){
+#     
+#     # for current experiment and subject,
+#     # choose RT trials between 0.01 and 5s for both dec and conf
+#     # and accumulate in list (subj.list)
+#     subj.list[[j]] <- subset(list.fin[[i]], 
+#                  (subj_idx == subs[j]) &
+#                  (rt_dec > 0.01 & rt_dec < 5) & 
+#                  (rt_conf > 0.01 & rt_conf < 5 ))
+#     
+#     # delete rows with missing values for response, confidence, rt_dec, rt_conf
+#     subj.list[[j]] <- subj.list[[j]][complete.cases(subj.list[[j]][ , 3:6]),]
+#     
+#     # then compute standardized RTs and Confidence. Use median rather than mean for centering
+#     subj.list[[j]]$rt_dec <- scale(subj.list[[j]]$rt_dec)
+#     subj.list[[j]]$rt_conf <- scale(subj.list[[j]]$rt_conf)
+#     subj.list[[j]]$rt_decconf <- scale(subj.list[[j]]$rt_decconf)
+#     subj.list[[j]]$confidence <- scale(subj.list[[j]]$confidence)
+#   }
+#   print(paste('Computing dataset ',i,'from ',length(exps)))
+#   scaled.list[[i]] <- rbindlist(subj.list)
+# }
+# df.new <- rbindlist(scaled.list)
+
+
 # Finally, merge all dataframe into one
 df <- rbindlist(list.fin)
 dim(df)
@@ -276,7 +307,7 @@ df <- subset(df, (df$rt_dec > (-3) & df$rt_dec < 3) &
 
 
 ## Save data for convience
-write.csv(df, paste(datdir_sav), "data_preproc")
+write.csv(df, paste(datdir_sav, "data_preproc"))
 
 
 
@@ -289,20 +320,25 @@ write.csv(df, paste(datdir_sav), "data_preproc")
 # clean up
 rm(list())
 
-# library(ggplot2)
-# library(GGally)
-# library(tidyverse)
-# library(stringr)
-# library(forecast)
-# library(pheatmap)
-# library(pracma)
-# library(data.table)
-# library(plyr)
-# library(psych)
-# library(mgcv)
-# library(knitr)
-# library(summarytools)
-# library(rccmisc)
+library(ggplot2)
+library(GGally)
+library(tidyverse)
+library(stringr)
+library(forecast)
+library(pheatmap)
+library(pracma)
+library(data.table)
+library(plyr)
+library(psych)
+library(mgcv)
+library(knitr)
+library(summarytools)
+library(rccmisc)
+library(TTR)
+library(reshape2)
+library(ggpubr)
+
+
 
 
 ## load preprocessed data
@@ -317,8 +353,8 @@ dinfo$exp_idx <- as.factor(1:dim(dinfo)[1])
 
 
 df <- df_full %>%
-  subset(select=c("exp_idx", "subj_idx", "confidence", "rt_dec", "rt_conf", "rt_decconf"))
-
+  subset(select=c("exp_idx", "subj_idx", "confidence", "rt_dec", "rt_conf", "rt_decconf", "stimulus", "response"))
+df$acc <- as.numeric(df$stimulus) == as.numeric(df$response)
 
 # check confidence scales again
 g <- ggplot(df, aes(as.factor(exp_idx), confidence, na.rm = TRUE))
@@ -327,6 +363,7 @@ g + geom_boxplot()
 
 # delete extreme confidence values
 df <- subset(df, (df$confidence > (-3) & df$confidence < 3))
+describe(df)
 
 
 # check confidence scales again
@@ -334,6 +371,17 @@ g <- ggplot(df, aes(as.factor(exp_idx), confidence, na.rm = TRUE))
 g + geom_boxplot()
 
 
+# delete studies with few trials per participant - require a minimum of 80
+head(dinfo)
+plot(dinfo$Min_trials_per_subject)
+exp_with_suff_trls <- dinfo$exp_idx[dinfo$Min_trials_per_subject >= 80]
+dinfo <- subset(dinfo, exp_idx %in% exp_with_suff_trls)
+df <- subset(df, exp_idx %in% exp_with_suff_trls)
+
+
+# also match dataframes otherwise
+exp_in_data <- as.factor(unique(df$exp_idx))
+dinfo <- subset(dinfo, exp_idx %in% exp_in_data)
 
 ## Collapse data over subjects
 df_summary <- df %>%
@@ -346,6 +394,25 @@ g <- ggplot(df_summary, aes(as.factor(exp_idx), confidence, na.rm = TRUE))
 g + geom_boxplot()
 #g + geom_jitter(shape=1, position=position_jitter(0.2))
 
+
+# subject level data with exp info
+df_subjlvl <- merge(df_summary, subset(dinfo, select=c("exp_idx", "Category", "Name_in_database", "Journal", "Year", "Stimuli", "Num_subjects", "Min_trials_per_subject")), by="exp_idx")
+g <- ggplot(df_subjlvl, aes(x=confidence, y=rt_conf, color=Category)) +
+  geom_point(size=.1, shape=23) +
+  geom_smooth()
+g
+
+
+# experiment level data with exp info
+df_explvl <- df_summary %>%
+  group_by(exp_idx) %>% 
+  summarise_each(funs(mean))
+df_explvl <- merge(df_explvl, subset(dinfo, select=c("exp_idx", "Category", "Name_in_database", "Journal", "Year", "Stimuli", "Num_subjects", "Min_trials_per_subject")), by="exp_idx")
+head(df_explvl)
+
+g <- ggplot(df_explvl, aes(x=confidence, y=rt_conf, color=Category)) +
+  geom_point(size=2, shape=1)
+g
 
 # number of ppts per experiment
 df_numsubj <- ddply(df,~exp_idx,summarise,nsubj=length(unique(subj_idx)))
@@ -370,50 +437,92 @@ g <- ggplot(df_summary, aes(as.factor(exp_idx), rt_decconf, na.rm = TRUE))
 g + geom_boxplot()
 
 
+# Add unique index (exp_idx x subj_idx)
+df$idx <- rep(0, dim(df)[1])
+del.rows <- df$idx < 0
+counter <- 1
+exps <- unique(df$exp_idx) 
+for(i in 1:length(exps)){
+  data <- subset(df, exp_idx == exps[i])
+  subs <- unique(data$subj_idx)  
+  for(j in 1:length(subs)){
+    # delete subject with only a single confidence response
+    curid <- df$exp_idx == exps[i] & df$subj_idx == subs[j]
+    if(length(unique(df$confidence[curid]))<=1){
+      del.rows[curid] <- TRUE
+    } else {
+      df$idx[curid] <- rep(counter, sum(curid))
+      counter <- counter + 1
+    }
+  }  
+  print(paste('Computing dataset ',i,'from ',length(exps)))
+} 
+
+df <- df[!del.rows,]
+
+## Save data for convience
+write.csv(df, paste(datdir_sav, "data_preproc2"))
+
+
+
+
+
+
+#pre-allocate empty variables 
+rt_conf <- rep(NA,0);rtconf_conf <- rep(NA,0);p_outlier1 <- rep(NA,0);p_outlier2 <- rep(NA,0);which_data_included <- rep(NA,0)
+counter <- 1 #participant counter
+counter2 <- 1 #study counter
 
 ## get estimates of confidence and RT over the course of the experiment
 conf.list <- list()
 rtconf.list <- list()
 rt.list <- list()
-npoints <- 100 # downsample time series to X points for every participant (walk through
+acc.list <- list()
+acc_conf.list <- list()
+npoints <- 25 # downsample time series to X points for every participant (walk through
 # experiment in npoints steps no matter how long it took actually)
 # Loop over all files
-for(i in 1:length(unique(df$exp_idx))){
-  data <- subset(df, exp_idx == i)
+idx <- c()
+exps <- unique(df$exp_idx) 
+for(i in 1:length(exps)){
+  data <- subset(df, exp_idx == exps[i])
   
   #loop over subjects in this dataset
-  subs <- unique(df$subj_idx)  
+  subs <- unique(data$subj_idx)  
   for(j in 1:length(subs)){
+    temp <- subset(data, subj_idx == subs[j])
     #Only compute correlations for participants with variation in confidence
     if(length(unique(temp$confidence))>1){
       #An (absolute) minimum of 3 trials is needed to compute correlations
-      if(dim(temp)[1]>20){
-        
-        #Compute correlations Confidence/Choice RT, and confidence
-        temp$confidence <- as.numeric(temp$confidence)
-        rt_conf[counter] <- cor(temp$rt_dec,temp$confidence)
-        rtconf_conf[counter] <- cor(temp$rt_conf,temp$confidence)
-        
-        # Compute confidence, RT and RTconf as a function of time
-        # for simplicity sake take moving average to get 25 datapoints for each ppt
-        trlid <- c(1:dim(temp)[1])
-        ma.conf <- movavg(temp$confidence, n=round(length(trlid)/npoints), type = "s")
-        conf.list[[counter]] <- ma.conf[round(linspace(1,length(trlid), npoints))]
-        ma.rtconf <- movavg(temp$rt_conf, n=round(length(trlid)/npoints), type = "s")
-        rtconf.list[[counter]] <- ma.rtconf[round(linspace(1,length(trlid), npoints))]
-        ma.rt <- movavg(temp$rt_dec, n=round(length(trlid)/npoints), type = "s")
-        rt.list[[counter]] <- ma.rt[round(linspace(1,length(trlid), npoints))]
-        
-      }
+      
+      #Compute correlations Confidence/Choice RT, and confidence
+      temp$confidence <- as.numeric(temp$confidence)
+      temp$acc <- as.numeric(temp$acc)
+      rt_conf[counter] <- cor(temp$rt_dec,temp$confidence)
+      rtconf_conf[counter] <- cor(temp$rt_conf,temp$confidence)
+      
+      # Compute confidence, RT and RTconf as a function of time
+      # for simplicity sake take moving average to get 25 datapoints for each ppt
+      trlid <- c(1:dim(temp)[1])
+      ma.conf <- movavg(temp$confidence, n=round(length(trlid)/npoints), type = "s")
+      conf.list[[counter]] <- ma.conf[round(linspace(1,length(trlid), npoints))]
+      ma.rtconf <- movavg(temp$rt_conf, n=round(length(trlid)/npoints), type = "s")
+      rtconf.list[[counter]] <- ma.rtconf[round(linspace(1,length(trlid), npoints))]
+      ma.rt <- movavg(temp$rt_dec, n=round(length(trlid)/npoints), type = "s")
+      rt.list[[counter]] <- ma.rt[round(linspace(1,length(trlid), npoints))]
+      ma.acc <- movavg(temp$acc, n=round(length(trlid)/npoints), type = "s")
+      acc.list[[counter]] <- ma.acc[round(linspace(1,length(trlid), npoints))]
+      ma.acc_conf <- runCor(temp$acc, temp$conf, n=round(length(trlid)/npoints))
+      acc_conf.list[[counter]] <- ma.acc_conf[round(linspace(1,length(trlid), npoints))]
+      
+      counter <- counter+1
+      idx <- c(idx, rep(temp$idx[1],25))
     }
   }
   print(paste('Computing dataset ',i,'from ',length(unique(df$exp_idx))))
 }
 
 #Which data are included
-data_files[which_data_included]
-length(which_data_included) #studies included
-length(data_files) #studies in the database
 length(rtconf_conf) #final N
 
 
@@ -422,9 +531,342 @@ conf.list[sapply(conf.list, is.null)] <- NULL
 confidence <- sapply(conf.list, rbind)
 rtconf.list[sapply(rtconf.list, is.null)] <- NULL
 confidenceRT <- sapply(rtconf.list, rbind)
-time.in.percent <- linspace(0,100,10)
+rt.list[sapply(rt.list, is.null)] <- NULL
+decRT <- sapply(rt.list, rbind)
+acc.list[sapply(acc.list, is.null)] <- NULL
+accuracy <- sapply(acc.list, rbind)
+acc_conf.list[sapply(acc_conf.list, is.null)] <- NULL
+acc_conf_cor <- sapply(acc_conf.list, rbind)
+time.in.percent <- linspace(0,100,25)
 plot(time.in.percent,apply(confidence, 1, mean), xlab="Time on task (in %)", ylab = "Confidence")
 plot(time.in.percent,apply(confidenceRT, 1, mean), xlab="Time on task (in %)", ylab = "Confidence RT")
+
+## combine data from info df and performance df over time
+df.conf <- melt(confidence)
+colnames(df.conf) <- c("time", "subj", "conf")
+df.confRT <- melt(confidenceRT)
+colnames(df.confRT) <- c("time", "subj", "confRT")
+df.RT <- melt(decRT)
+colnames(df.RT) <- c("time", "subj", "decRT")
+df.acc <- melt(accuracy)
+colnames(df.acc) <- c("time", "subj", "acc")
+df.acc_conf_cor <- melt(acc_conf_cor)
+df.time <- cbind(df.conf, df.confRT$confRT, df.RT$decRT, df.acc$acc, df.acc_conf_cor$value)
+colnames(df.time) <- c("time", "subj", "conf", "confRT", "decRT", "acc", "acc_conf_cor")
+head(df.time)
+# add additional column variables
+df.full <- merge(df, subset(dinfo, select=c("exp_idx", "Category", "Name_in_database", "Journal", "Year", "Stimuli", "Num_subjects", "Min_trials_per_subject")), by="exp_idx")
+df.time <- cbind(data.frame(idx), df.time)
+df.full$idx <- as.factor(df.full$idx)
+df.catego <- df.full %>% 
+  select(idx, Category, Name_in_database, Journal, Year, Stimuli, Num_subjects, Min_trials_per_subject) %>%
+  unique()
+dim(df.catego)
+
+## finally I can have my temporal data with associated category of task, journal etc.
+df.time <- cbind(df.time, df.catego)
+
+# change time to percent
+df.time$time <- df.time$time * 4
+df.time <- df.time[,2:dim(df.time)[2]]
+
+
+# save preprocessed temporal data
+write.csv(df.time, paste(datdir_sav, "data_preproc_time"))
+
+
+
+
+# ------ Plot as a function of time -------
+#
+# by CONFIDENCE RESPONSE TIME
+#
+y <- "confRT"   # confRT, conf
+x <- "time"
+# overall
+g <- ggplot(df.time, aes_string(x=x, y=y)) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g
+# Task category
+g.cat <- ggplot(df.time, aes_string(x=x, y=y, color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.cat
+table(df.time$Category)
+
+# Experiment Idx
+g.exp <- ggplot(df.time, aes_string(x=x, y=y, color="Name_in_database")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.exp
+table(df.time$Name_in_database)
+
+# Experiment Idx
+g.year <- ggplot(df.time, aes_string(x=x, y=y, color="Year")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.year
+table(df.time$Name_in_database)
+
+
+
+## -------------------------------------------
+## Plot RTdec and RTconf (when both made separately)
+g1 <- ggplot(subset(df.time, decRT != confRT), aes_string(x=x, y="confRT")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g2 <- ggplot(subset(df.time, decRT != confRT), aes_string(x=x, y="decRT")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g1
+g2
+
+# ------ Plot as a function of time -------
+#
+# by CONFIDENCE RESPONSE TIME
+#
+y <- "decRT"   # confRT, conf
+x <- "time"
+# overall
+g <- ggplot(df.time, aes_string(x=x, y=y)) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g
+# Task category
+g.cat <- ggplot(df.time, aes_string(x=x, y=y, color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.cat
+table(df.time$Category)
+
+# Experiment Idx
+g.exp <- ggplot(df.time, aes_string(x=x, y=y, color="Name_in_database")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.exp
+table(df.time$Name_in_database)
+
+# Experiment Idx
+g.year <- ggplot(df.time, aes_string(x=x, y=y, color="Year")) +
+  geom_smooth(se = TRUE, level = 0.67) +
+  ylab("Confidence response speed (in SD)") +
+  xlab("Time on task (in %)")
+g.year
+table(df.time$Name_in_database)
+
+
+
+#
+# by CONFIDENCE RESPONSE
+#
+y <- "conf"   # confRT, conf
+x <- "time"
+# overall
+g <- ggplot(df.time, aes_string(x=x, y=y)) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g
+# Task category
+g.cat <- ggplot(df.time, aes_string(x=x, y=y, color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.cat
+table(df.time$Category)
+
+# Experiment Idx
+g.exp <- ggplot(df.time, aes_string(x=x, y=y, color="Name_in_database")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.exp
+table(df.time$Name_in_database)
+
+# Journal
+g.j <- ggplot(df.time, aes_string(x=x, y=y, color="Journal")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.j
+table(df.time$Journal)
+
+
+g.stim <- ggplot(df.time, aes_string(x=x, y=y, color="Stimuli")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.stim
+table(df.time$Stimuli)
+
+
+#
+# by RESPONSE ACCURACY
+#
+y <- "acc"   # confRT, conf
+x <- "time"
+# overall
+g <- ggplot(df.time, aes_string(x=x, y=y)) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g
+# Task category
+g.cat <- ggplot(df.time, aes_string(x=x, y=y, color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.cat
+table(df.time$Category)
+
+# Experiment Idx
+g.exp <- ggplot(df.time, aes_string(x=x, y=y, color="Name_in_database")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.exp
+table(df.time$Name_in_database)
+
+# Journal
+g.j <- ggplot(df.time, aes_string(x=x, y=y, color="Journal")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.j
+table(df.time$Journal)
+
+
+g.stim <- ggplot(df.time, aes_string(x=x, y=y, color="Stimuli")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence (in SD)") +
+  xlab("Time on task (in %)")
+g.stim
+table(df.time$Stimuli)
+
+
+
+
+#
+# by metacognitive efficiency (acc corr with conf)
+#
+y <- "acc_conf_cor"   # confRT, conf
+x <- "time"
+# overall
+g <- ggplot(df.time, aes_string(x=x, y=y)) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Pearson correlation accuracy, confidence") +
+  xlab("Time on task (in %)")
+g
+# Task category
+g.cat <- ggplot(df.time, aes_string(x=x, y=y, color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Pearson correlation accuracy, confidence") +
+  xlab("Time on task (in %)")
+g.cat
+table(df.time$Category)
+
+# Experiment Idx
+g.exp <- ggplot(df.time, aes_string(x=x, y=y, color="Name_in_database")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Pearson correlation accuracy, confidence") +
+  xlab("Time on task (in %)")
+g.exp
+table(df.time$Name_in_database)
+
+# Journal
+g.j <- ggplot(df.time, aes_string(x=x, y=y, color="Journal")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Pearson correlation accuracy, confidence") +
+  xlab("Time on task (in %)")
+g.j
+table(df.time$Journal)
+
+
+g.stim <- ggplot(df.time, aes_string(x=x, y=y, color="Stimuli")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Pearson correlation accuracy, confidence") +
+  xlab("Time on task (in %)")
+g.stim
+table(df.time$Stimuli)
+
+
+
+
+## Multiplot: RT conf / dec
+# Task category
+g.decRT <- ggplot(subset(df.time, decRT != confRT & 
+  Category %in% c("Cognitive", "Memory", "Motor", "Perception")), 
+  aes_string(x=x, y="decRT", color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Response speed (in SD)") +
+  xlab("Time on task (in %)")
+
+g.confRT <- ggplot(subset(df.time, decRT != confRT & 
+  Category %in% c("Cognitive", "Memory", "Motor", "Perception")),
+  aes_string(x=x, y="confRT", color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Response speed (in SD)") +
+  xlab("Time on task (in %)")
+
+ggarrange(g.decRT, g.confRT, 
+          labels = c("A", "B"),
+          ncol = 2, nrow = 1)
+
+
+
+## plot: acc / conf
+# Task category
+g.accconf <- ggplot(subset(df.time, decRT != confRT & 
+                             Category %in% c("Cognitive", "Memory", "Motor", "Perception")), 
+                    aes_string(x="acc", y="conf", color="Category")) +
+#  geom_point() +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Confidence") +
+  xlab("Performance accuracy")
+g.accconf
+
+
+
+
+g.accconf <- ggplot(subset(df.time, decRT != confRT & 
+                           Category %in% c("Cognitive", "Memory", "Motor", "Perception")), 
+                  aes_string(x=x, y="acc_conf_cor", color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Correlation of accuracy and confidence") +
+  xlab("Time on task (in %)")
+g.accconf
+
+
+
+g.confRT <- ggplot(subset(df.time, decRT != confRT & 
+                            Category %in% c("Cognitive", "Memory", "Motor", "Perception")),
+                   aes_string(x=x, y="acc_conf_cor", color="Category")) +
+  geom_smooth(se = TRUE, level = 0.67)+
+  ylab("Correlation of accuracy and confidence") +
+  xlab("Time on task (in %)")
+
+ggarrange(g.decRT, g.confRT, 
+          labels = c("A", "B"),
+          ncol = 2, nrow = 1)
+
+
+
+df.table <- table(subset(df.time, Category %in% c("Cognitive", "Memory", "Motor", "Perception"))$Category)/25
+df.freq <- data.frame(df.table)
+colnames(df.freq) <- c("Category", "Count")
+ggplot(df.freq, aes(x=Category, y=Count, na.rm = TRUE, color = Category, fill = Category)) +
+  geom_bar(stat = "identity")
+
 
 
 
