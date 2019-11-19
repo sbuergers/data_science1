@@ -3,7 +3,7 @@ Is metacognition a general mechanism?
 
 ## What is metacognition?
 
-![](C:\\Users\\sbuer\\OneDrive\\Documents\\admin\\Applications\\data_incubator\\challenge\\metacognition_cartoon.jpg)
+![](metacognition_cartoon.jpg)
 
 ## Comparing memory and perception studies
 

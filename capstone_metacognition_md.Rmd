@@ -31,7 +31,7 @@ df.time <- read.csv(paste(datdir_sav, "data_preproc_time"))
 
 
 ## What is metacognition?
-![](C:\Users\sbuer\OneDrive\Documents\admin\Applications\data_incubator\challenge\metacognition_cartoon.jpg)
+![](metacognition_cartoon.jpg)
 
 
 ## Comparing memory and perception studies
@@ -119,5 +119,7 @@ ggarrange(g.conf, g.acc, g.combi,
 
 
 ## Future work: Take into account response bias!
+
+
 
 
